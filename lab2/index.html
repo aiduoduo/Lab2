@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Lab2</title>
+</head>
+<body>
+<div id="q">
+
+</div>
+</body>
+<script src="libs/three.js"></script>
+<script src="libs/socket.io.js"></script>
+<script src="libs/GLTFLoader.js"></script>
+<script src="libs/FirstPersonControls.js"></script>
+<script src="libs/PointerLockControls.js"></script>
+<script>
+    const SCREEN_WIDTH = window.innerWidth, SCREEN_HEIGHT = window.innerHeight;
+    let scene;
+
+    //初始化场景
+    function initScene() {
+        scene = new THREE.Scene();
+    }
+
+    let camera;
+    //初始化
+    function initCamera() {
+        const VIEW_ANGLE = 45, ASPECT = SCREEN_WIDTH / SCREEN_HEIGHT, NEAR = 0.3, FAR = 1000;
+        camera = new THREE.PerspectiveCamera(VIEW_ANGLE, ASPECT, NEAR, FAR);
+        camera.position.set(0, 20, 50);
+        camera.lookAt(new THREE.Vector3(0, 15, 0));
+        scene.add(camera);
+    }
+
+    //初始化灯光
+    function initLight() {
+        const light = new THREE.AmbientLight(0xaaaaaa);
+        scene.add(light);
+    }
+
+    const textureLoader = new THREE.TextureLoader();
+    //创建天空盒
+    function creatSkyBox() {
+        scene.background = new THREE.Color(0xaaaaaa);
+        scene.background = new THREE.CubeTextureLoader().setPath('resources/skybox/').load(
+            [
+                'px.jpg',
+                'nx.jpg',
+                'py.jpg',
+                'ny.jpg',
+                'pz.jpg',
+                'nz.jpg'
+            ]
+        );
+    }
+    //创建地板
+    function creatFloor() {
+        textureLoader.load("resources/floor/FloorsCheckerboard_S_Diffuse.jpg", function (texture) {
+            texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+            texture.repeat.set(4, 4);
+            const floorMaterial = new THREE.MeshBasicMaterial({
+                map: texture,
+                side: THREE.DoubleSide
+            });
+            const floorGeometry = new THREE.PlaneGeometry(5000, 5000, 5, 5);
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.position.y = 0;
+            floor.rotation.x = Math.PI / 2;
+            scene.add(floor);
+        })
+    }
+
+    // W S A D 的keycode
+    const KEY_W = 87;
+    const KEY_S = 83;
+    const KEY_A = 65;
+    const KEY_D = 68;
+    const KEY_SPACE = 32;
+    let jumping = false;
+
+    class FirstPersonControls {
+        constructor(domElement) {
+            this.domElement = domElement || document.body;
+            this.isLocked = false;
+            this.camera = camera;
+
+            // 初始化camera, 将camera放在pitchObject正中央
+            camera.rotation.set(0, 0, 0);
+            camera.position.set(0, 0, 0);
+
+            // 将camera添加到pitchObject, 使camera沿水平轴做旋转, 并提升pitchObject的相对高度
+            this.pitchObject = new THREE.Object3D();
+            this.pitchObject.add(camera);
+            this.pitchObject.position.y = 10;
+
+            // 将pitObject添加到yawObject, 使camera沿竖直轴旋转
+            this.yawObject = new THREE.Object3D();
+            this.yawObject.add(this.pitchObject);
+
+            // 初始化移动状态
+            this.moveForward = false;
+            this.moveBackward = false;
+            this.moveLeft = false;
+            this.moveRight = false;
+        }
+
+        onPointerlockChange() {
+            console.log(this.domElement);
+            this.isLocked = document.pointerLockElement === this.domElement;
+        }
+
+        onPointerlockError() {
+            console.error('THREE.PointerLockControls: Unable to use Pointer Lock API');
+        }
+
+        onMouseMove(event) {
+            if (this.isLocked) {
+                let movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
+                let movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+
+                this.yawObject.rotation.y -= movementX * 0.002;
+                this.pitchObject.rotation.x -= movementY * 0.002;
+                // 这一步的目的是什么
+                this.pitchObject.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.pitchObject.rotation.x));
+            }
+        }
+
+        onKeyDown(event) {
+            switch (event.keyCode) {
+                case KEY_W:
+                    this.moveForward = true;
+                    break;
+                case KEY_A:
+                    this.moveLeft = true;
+                    break;
+                case KEY_S:
+                    this.moveBackward = true;
+                    break;
+                case KEY_D:
+                    this.moveRight = true;
+                    break;
+                case KEY_SPACE:
+                    jumping = true;
+                    break;
+            }
+        }
+
+        onKeyUp(event) {
+            switch (event.keyCode) {
+                case KEY_W:
+                    this.moveForward = false;
+                    break;
+                case KEY_A:
+                    this.moveLeft = false;
+                    break;
+                case KEY_S:
+                    this.moveBackward = false;
+                    break;
+                case KEY_D:
+                    this.moveRight = false;
+                    break;
+                case KEY_SPACE:
+                    jumping = false;
+                    break;
+            }
+        }
+
+        update(delta) {
+            // 移动速度
+            const moveSpeed = 100;
+
+            // 确定移动方向
+            let direction = new THREE.Vector3();
+            direction.x = Number(this.moveRight) - Number(this.moveLeft);
+            direction.z = Number(this.moveBackward) - Number(this.moveForward);
+            direction.y = 0;
+
+            // 移动方向向量归一化，使得实际移动的速度大小不受方向影响
+            if (direction.x !== 0 || direction.z !== 0) {
+                direction.normalize();
+            }
+
+            // 移动距离等于速度乘上间隔时间delta
+            if (this.moveForward || this.moveBackward) {
+                this.yawObject.translateZ(moveSpeed * direction.z * delta);
+            }
+            if (this.moveLeft || this.moveRight) {
+                this.yawObject.translateX(moveSpeed * direction.x * delta);
+            }
+            if (this.yawObject.position.y > 0) {
+                this.yawObject.position.y -= 1;
+                this.yawObject.position.y = this.yawObject.position.y < 0 ? 0 : this.yawObject.position.y;
+            }
+
+        }
+
+        connect() {
+            this.domElement.addEventListener('click', this.domElement.requestPointerLock);
+            // 思考函数后面为什么要加bind(this)
+            document.addEventListener('pointerlockchange', this.onPointerlockChange.bind(this), false);
+            document.addEventListener('pointerlockerror', this.onPointerlockError.bind(this), false);
+            document.addEventListener('mousemove', this.onMouseMove.bind(this), false);
+            document.addEventListener('keydown', this.onKeyDown.bind(this), false);
+            document.addEventListener('keyup', this.onKeyUp.bind(this), false);
+        }
+    }
+    function jump(){
+        if(jumping)
+            fpc.yawObject.translateY(2);
+        requestAnimationFrame(jump);
+    }
+
+    let fpc;
+    function initControl() {
+        fpc = new FirstPersonControls();
+        fpc.connect();
+        scene.add(fpc.yawObject);
+    }
+
+    let renderer;
+    function initRender() {
+        renderer = new THREE.WebGLRenderer({antialias: true});
+        renderer.setSize(SCREEN_WIDTH, SCREEN_HEIGHT);
+        document.body.appendChild(renderer.domElement);
+    }
+
+    let clock = new THREE.Clock();
+    const socket = io('localhost:3000');
+
+    function render() {
+        fpc.update(clock.getDelta());
+        socket.emit('player', {position: fpc.yawObject.position, rotation: fpc.yawObject.rotation});
+        requestAnimationFrame(render);
+        renderer.render(scene, camera);
+    }
+
+    function init() {
+        initScene();
+        initLight();
+        initCamera();
+        creatSkyBox();
+        creatFloor();
+        initControl();
+        initRender();
+        render();
+        jump();
+    }
+
+    init();
+
+    window.addEventListener("resize", onWindowResize);
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    let playerMap = new Map();
+    playerMap.set(socket.id);
+    socket.on('player', data => {
+        if (playerMap.has(data.socketid)) {
+            let model = playerMap.get(data.socketid);
+            model.position.set(data.position.x, data.position.y, data.position.z);
+            model.rotation.set(data.rotation._x, data.rotation._y + Math.PI / 2, data.rotation._z);
+        } else {
+            let loader = new THREE.GLTFLoader();
+            loader.load("resources/model/duck.glb", (mesh) => {
+                mesh.scene.scale.set(10, 10, 10);
+                // mesh.scene.position.set(100,100,100);
+                scene.add(mesh.scene);
+                playerMap.set(data.socketid, mesh.scene);
+            });
+        }
+    });
+    socket.on('offline', data => {
+        if (playerMap.has(data.socketid)) {
+            scene.remove(playerMap.get(data.socketid));
+            playerMap.delete(data.socketid)
+        }
+    });
+</script>
